@@ -1,1 +1,1 @@
-from bitgo import BitGo
+from . bitgo import BitGo

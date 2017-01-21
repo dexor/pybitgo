@@ -1,6 +1,6 @@
 from setuptools import setup
 
-version = "0.1.3"
+version = "0.1.5"
 
 setup(
     name='bitgo',
@@ -20,8 +20,10 @@ setup(
     keywords=['bitcoin', 'bitgo'],
     classifiers=[
         'Programming Language :: Python :: 2.7',
+        'Programming Language :: Python :: 3.5',
+        'Programming Language :: Python :: 3.6',
         'Topic :: Internet',
         'Topic :: Software Development :: Libraries :: Python Modules',
     ],
-    install_requires=["pycryptodome", "requests", "pycoin"]
+    install_requires=["pycryptodome", "requests", "pycoin", "six"]
 )

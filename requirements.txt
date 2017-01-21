@@ -1,3 +1,4 @@
 requests
 pycryptodome
 pycoin==0.70
+six==1.10.0

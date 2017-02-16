@@ -25,5 +25,10 @@ setup(
         'Topic :: Internet',
         'Topic :: Software Development :: Libraries :: Python Modules',
     ],
-    install_requires=["pycryptodome", "requests", "pycoin", "six"]
+    install_requires=[
+        "requests==2.13.0",
+        "pycryptodome==3.4.3",
+        "pycoin==0.70",
+        "six==1.10.0",
+    ]
 )

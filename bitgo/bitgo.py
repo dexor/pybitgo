@@ -14,39 +14,23 @@ However, there is a bug in version 0.52 which prevents this from working.
 Below is a workaround.
 
 """
-import requests
 import json
+
+import requests
+from pycoin import ecdsa
+from pycoin import encoding
+from pycoin.key.BIP32Node import BIP32Node
+from pycoin.serialize import b2h, h2b, h2b_rev
+from pycoin.tx import Spendable
+from pycoin.tx.exceptions import SolvingError
+from pycoin.tx.pay_to import build_hash160_lookup, build_p2sh_lookup
+from pycoin.tx.pay_to.ScriptMultisig import ScriptMultisig
+from pycoin.tx.script import tools
+from pycoin.tx.script.check_signature import parse_signature_blob
+from pycoin.tx.tx_utils import create_tx
 
 from . import sjcl
 from . errors import BitGoError, NotActiveWallet, NotSpendableWallet, NotEnoughFunds, UnauthorizedError
-
-from Crypto.Random import random
-
-from pycoin.key.BIP32Node import BIP32Node
-from pycoin.tx.Spendable import Spendable
-from pycoin.tx import tx_utils
-from pycoin.tx.pay_to import build_hash160_lookup, build_p2sh_lookup
-from pycoin.serialize import h2b, h2b_rev, b2h, h2b_rev
-from pycoin.key.validate import is_address_valid
-from pycoin import encoding
-from pycoin.serialize import b2h, h2b, stream_to_bytes
-from pycoin.key import Key
-from pycoin.key.BIP32Node import BIP32Node
-from pycoin.networks import NETWORK_NAMES
-from pycoin.tx.pay_to import ScriptMultisig, build_p2sh_lookup
-from pycoin.tx.pay_to import address_for_pay_to_script
-from pycoin.tx import Tx
-from pycoin.tx.tx_utils import LazySecretExponentDB
-from pycoin.tx.tx_utils import create_tx
-from pycoin.services import get_tx_db
-from pycoin.tx import Spendable
-
-from pycoin.tx.pay_to.ScriptMultisig import ScriptMultisig
-from pycoin.tx.exceptions import SolvingError
-from pycoin.tx.script import tools
-from pycoin.tx.script.check_signature import parse_signature_blob
-from pycoin import ecdsa
-from pycoin import encoding
 
 ScriptMultisig._dummy_signature = lambda x, y: "\x00"
 
@@ -119,58 +103,6 @@ def solve(self, **kwargs):
 
 ScriptMultisig.solve = solve
 
-"""
-pycoin version 0.52 (and maybe 0.53) do not sign multisig transaction
-correctly. See:
-https://github.com/richardkiss/pycoin/issues/71
-Below is a workaround.
-"""
-
-
-from pycoin.tx.Tx import Tx, SIGHASH_ALL
-from pycoin.tx.pay_to import ScriptPayToScript, script_obj_from_script
-from pycoin.tx.script import opcodes
-
-
-byte_to_int = ord if bytes == str else lambda x: x
-
-
-def sign_tx_in(self, hash160_lookup, tx_in_idx, tx_out_script, hash_type=SIGHASH_ALL, **kwargs):
-    tx_in = self.txs_in[tx_in_idx]
-
-    is_p2h = (
-        len(tx_out_script) == 23 and
-        byte_to_int(tx_out_script[0]) == opcodes.OP_HASH160 and
-        byte_to_int(tx_out_script[-1]) == opcodes.OP_EQUAL
-    )
-
-    script_to_hash = tx_out_script
-    if is_p2h:
-        hash160 = ScriptPayToScript.from_script(tx_out_script).hash160
-        p2sh_lookup = kwargs.get("p2sh_lookup")
-        if p2sh_lookup is None:
-            raise ValueError("p2sh_lookup not set")
-        if hash160 not in p2sh_lookup:
-            raise ValueError("hash160=%s not found in p2sh_lookup" %
-                    b2h(hash160))
-        script_to_hash = p2sh_lookup[hash160]
-
-    signature_for_hash_type_f = lambda hash_type: self.signature_hash(tx_out_script, tx_in_idx, hash_type)
-    if tx_in.verify(tx_out_script, signature_for_hash_type_f, lock_time=kwargs.get('lock_time')):
-        return
-    sign_value = self.signature_hash(script_to_hash, tx_in_idx, hash_type=hash_type)
-    the_script = script_obj_from_script(tx_out_script)
-    solution = the_script.solve(
-        hash160_lookup=hash160_lookup,
-        sign_value=sign_value,
-        signature_type=hash_type,
-        existing_script=self.txs_in[tx_in_idx].script,
-        **kwargs
-    )
-    tx_in.script = solution
-
-Tx.sign_tx_in = sign_tx_in
-
 
 class BitGo(object):
 
@@ -206,6 +138,13 @@ class BitGo(object):
 
         return r.json()
 
+    def get_user_profile(self):
+        """
+        Get information about the current authenticated user
+        :return: User Model object
+        """
+        return self._request('/user/me')
+
     def ping(self):
         """
         Check BitGo server status
@@ -213,7 +152,7 @@ class BitGo(object):
         """
         return self._request('/ping', auth_required=False)
 
-    def get_access_token(self, username, password, otp=None):
+    def get_access_token(self, username, password, otp=None, extensible=False):
         """
         Get a token for first-party access to the BitGo API.
 
@@ -223,6 +162,7 @@ class BitGo(object):
         :param username:
         :param password:
         :param otp: One-Time Password - The 2-factor-authentication token
+        :param extensible: is the session supposed to be extensible beyond a one-hour duration
         :return: access token string
         """
         params = {
@@ -232,6 +172,9 @@ class BitGo(object):
         if otp:
             params['otp'] = otp
 
+        if extensible:
+            params['extensible'] = extensible
+
         r = self._request('/user/login', 'POST', auth_required=False, data=params, error_handler={
             'type': Exception,
             'msg': 'failed request to BitGo {}'
@@ -239,6 +182,13 @@ class BitGo(object):
 
         self.access_token = r['access_token']
         return self.access_token
+
+    def logout(self):
+        """
+        Logout of the BitGo service
+        :return: None
+        """
+        return self._request('/user/logout')
 
     def send_otp(self):
         """
@@ -425,8 +375,12 @@ class BitGo(object):
         # add base64 paddings
         for k in ['iv', 'salt', 'ct']:
             data[k] += '=='
+
         cipher = sjcl.SJCL()
-        xprv = cipher.decrypt(data, pass_phrase)
+        try:
+            xprv = cipher.decrypt(data, pass_phrase)
+        except ValueError:
+            raise BitGoError('Pass phrase looks invalid')
 
         # get unspent transactions we have in specified wallet and
         # exclude ones without confirmations
